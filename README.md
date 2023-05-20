@@ -25,7 +25,6 @@ In order to create token2idx you can use the following script:
 ```
 from typing import Dict
 import json
-from collections import OrderedDict
 
 from typing import List 
 

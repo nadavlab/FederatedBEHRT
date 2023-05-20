@@ -1,19 +1,12 @@
 import copy
 import gc
-import logging
+from collections import OrderedDict
+from multiprocessing import pool, cpu_count
 from operator import itemgetter
 
 import model
-import numpy as np
-import torch
-import torch.nn as nn
-
-from multiprocessing import pool, cpu_count
-
-from model.MLM import BertForMaskedLM
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from collections import OrderedDict
 
 from .models import *
 from .client import Client

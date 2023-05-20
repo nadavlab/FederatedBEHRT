@@ -1,15 +1,11 @@
 import gc
-import pickle
 import logging
 
 import model.optimiser
-import numpy as np
 import torch
-import torch.nn as nn
 from sklearn.preprocessing import MultiLabelBinarizer
-
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+
 from src.utils import calc_measurements
 
 logger = logging.getLogger(__name__)

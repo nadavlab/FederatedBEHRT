@@ -19,8 +19,8 @@ data_config:
 fed_config:
   C: 0.1
   R: 500
-  E: 10 # todo: change it later
-  B: 8 # was 10
+  E: 10
+  B: 8
 ---
 init_config:
   init_type: "xavier"

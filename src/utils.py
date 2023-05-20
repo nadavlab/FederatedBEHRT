@@ -1,26 +1,17 @@
 import ast
 import glob
-import os
 import logging
-from collections import Counter
-from typing import Dict, Type, Optional
+import os
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
-import sklearn
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-from common.common import load_obj
-from dataLoader.MLM import MLMLoader
 from dataLoader.NextXVisit import NextVisit
-from model.NextXVisit import BertForMultiLabelPrediction
-from model.utils import age_vocab
-from preprocess.bert_vocab_builder import BertVocab
+from sklearn.metrics import average_precision_score, roc_auc_score, recall_score, f1_score
 from sklearn.preprocessing import MultiLabelBinarizer
-
-from torch.utils.data import Dataset
-from sklearn.metrics import precision_score, average_precision_score, roc_auc_score, recall_score, f1_score
 
 logger = logging.getLogger(__name__)
 
