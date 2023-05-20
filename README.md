@@ -20,6 +20,7 @@ test_path: path to test csv file, same format as behrt_nextvisit_example_data.cs
 vocab_pickle_path: path to the pickle that contains the vocab. 
 
 You can you this script to create your pickle vocab: https://github.com/Ofir408/BEHRT/blob/master/preprocess/bert_vocab_builder.py
+
 In order to create token2idx you can use the following script:
 ```
 from typing import Dict
