@@ -1,0 +1,54 @@
+global_config:
+  seed: 5959
+  device: "cuda"
+  is_mp: True
+  output_model_path: "next-visit-model"
+  pretrained_model_path: "FL-mimic-iv-icd10-with-aggregations-mlm-model"  # pretrained MLM path
+
+---
+data_config:
+  dataset_name: "NextVisit-MIMIC-IV"
+  data_dir_path: "multi_center_dir_path"
+  test_path: "test_mimic_iv_behrt_with_aggregations_next_visit_ds.csv"
+  vocab_pickle_path: "mimic_iv_icd10_with_aggregations_vocab"
+  max_patient_age: 110
+  max_len_seq: 64
+  min_visit: 1
+---
+
+fed_config:
+  C: 0.1
+  R: 500
+  E: 10 # todo: change it later
+  B: 8 # was 10
+---
+init_config:
+  init_type: "xavier"
+  init_gain: 1.0
+  gpu_ids: [ 0 ]
+---
+model_config:
+  name: CustomBertForMultiLabelPrediction
+  hidden_size: 288  # word embedding and seg embedding hidden size
+  seg_vocab_size: 2  # number of vocab for seg embedding
+  max_position_embedding: 64  # maximum number of tokens
+  hidden_dropout_prob: 0.1  # dropout rate
+  num_hidden_layers: 6  # number of multi-head attention layers required
+  num_attention_heads: 12  # number of attention heads
+  attention_probs_dropout_prob: 0.1  # multi-head attention dropout rate
+  intermediate_size: 512  # the size of the "intermediate" layer in the transformer encoder
+  hidden_act: gelu
+  # The non-linear activation function in the encoder and the pooler "gelu", relu, swish are supported
+  initializer_range: 0.02  # parameter weight initializer range
+  feature_dict_config:
+    word: true
+    seg: true
+    age: true
+    position: true
+
+---
+log_config:
+  log_path: "./log/"
+  log_name: "FL.log"
+  tb_port: 9989
+  tb_host: "0.0.0.0"
