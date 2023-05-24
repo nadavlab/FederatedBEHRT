@@ -1,9 +1,14 @@
 BEHRT federated learning Implementation of the `FederatedAveraging` algorithm.
+Code of the paper: Federated Learning of Medical Concepts Embedding using BEHRT
+https://arxiv.org/abs/2305.13052
 
-If you used our code, please cite us: 
-
--add link to arxiv here-
-
+**If you used our code, please cite us: **
+@article{shoham2023federated,
+  title={Federated Learning of Medical Concepts Embedding using BEHRT},
+  author={Shoham, Ofir Ben and Rappoport, Nadav},
+  journal={arXiv preprint arXiv:2305.13052},
+  year={2023}
+}
 `FederatedAveraging` algorithm proposed in the paper [Communication-Efficient Learning of Deep Networks from Decentralized Data](https://arxiv.org/abs/1602.05629) in PyTorch.
 
 Thanks to https://github.com/vaseline555/Federated-Learning-PyTorch for the initial code base. 
@@ -25,7 +30,7 @@ In order to create token2idx you can use the following script:
 ```
 from typing import Dict
 import json
-
+import pandas as pd
 from typing import List 
 
 def get_all_codes(df: pd.DataFrame, codes_to_ignore: List[str]) -> List[str]:
