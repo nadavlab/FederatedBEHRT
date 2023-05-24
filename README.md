@@ -2,15 +2,18 @@ BEHRT federated learning Implementation of the `FederatedAveraging` algorithm.
 Code of the paper: Federated Learning of Medical Concepts Embedding using BEHRT
 https://arxiv.org/abs/2305.13052
 
+
 **If you used our code, please cite us: **
+```
 @article{shoham2023federated,
   title={Federated Learning of Medical Concepts Embedding using BEHRT},
   author={Shoham, Ofir Ben and Rappoport, Nadav},
   journal={arXiv preprint arXiv:2305.13052},
   year={2023}
 }
-`FederatedAveraging` algorithm proposed in the paper [Communication-Efficient Learning of Deep Networks from Decentralized Data](https://arxiv.org/abs/1602.05629) in PyTorch.
+```
 
+`FederatedAveraging` algorithm proposed in the paper [Communication-Efficient Learning of Deep Networks from Decentralized Data](https://arxiv.org/abs/1602.05629) in PyTorch.
 Thanks to https://github.com/vaseline555/Federated-Learning-PyTorch for the initial code base. 
 
 
