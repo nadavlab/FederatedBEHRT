@@ -1,27 +1,32 @@
-import ast
 import glob
-import logging
 import os
-from typing import Dict, Optional
+import logging
+import ast
+from collections import Counter
+from typing import Dict
 
 import numpy as np
 import pandas as pd
+import sklearn
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-from dataLoader.NextXVisit import NextVisit
-from sklearn.metrics import average_precision_score, roc_auc_score, recall_score, f1_score
-from sklearn.preprocessing import MultiLabelBinarizer
+from common.common import load_obj
+from dataLoader.MLM import MLMLoader
+from model.utils import age_vocab
+
+from torch.utils.data import Dataset
+from sklearn.metrics import precision_score
 
 logger = logging.getLogger(__name__)
 
 
 #######################
-# TensorBoard setting #
+# TensorBaord setting #
 #######################
 def launch_tensor_board(log_path, port, host):
     """Function for initiating TensorBoard.
-
+    
     Args:
         log_path: Path where the log is stored.
         port: Port number used for launching TensorBoard.
@@ -37,12 +42,12 @@ def launch_tensor_board(log_path, port, host):
 #########################
 def init_weights(model, init_type, init_gain):
     """Function for initializing network weights.
-
+    
     Args:
         model: A torch.nn instance to be initialized.
         init_type: Name of an initialization method (normal | xavier | kaiming | orthogonal).
         init_gain: Scaling factor for (normal | xavier | orthogonal).
-
+    
     Reference:
         https://github.com/DS3Lab/forest-prediction/blob/master/pix2pix/models/networks.py
     """
@@ -70,13 +75,13 @@ def init_weights(model, init_type, init_gain):
 
 def init_net(model, init_type, init_gain, gpu_ids):
     """Function for initializing network weights.
-
+    
     Args:
         model: A torch.nn.Module to be initialized
         init_type: Name of an initialization method (normal | xavier | kaiming | orthogonal)l
         init_gain: Scaling factor for (normal | xavier | orthogonal).
         gpu_ids: List or int indicating which GPU(s) the network runs on. (e.g., [0, 1, 2], 0)
-
+    
     Returns:
         An initialized torch.nn.Module instance.
     """
@@ -88,40 +93,26 @@ def init_net(model, init_type, init_gain, gpu_ids):
     return model
 
 
-def create_dataset(data_path: str, bert_vocab: Dict, age_vocab_dict: Dict, max_len_seq: int, min_visit: int) -> \
-        Optional[NextVisit]:
+def create_dataset(data_path: str, bert_vocab: Dict, age_vocab_dict: Dict, max_len_seq: int, min_visit: int) -> Dataset:
     df = pd.read_csv(data_path)
-    label_vocab = format_label_vocab(bert_vocab['token2idx'])
     token2idx = bert_vocab['token2idx']
     df['length'] = df['code'].apply(lambda codes: count_visits(codes))
     df = df[df['length'] >= min_visit]
     df = df.reset_index(drop=True)
     if not _is_dataset_valid(df):
         return None
-    return NextVisit(token2idx=token2idx, label2idx=label_vocab, age2idx=age_vocab_dict, dataframe=df,
-                     max_len=max_len_seq)
-
-
-def format_label_vocab(token2idx):
-    token2idx = token2idx.copy()
-    del token2idx['PAD']
-    del token2idx['SEP']
-    del token2idx['CLS']
-    del token2idx['MASK']
-    token = list(token2idx.keys())
-    label_vocab = {}
-    for i, x in enumerate(token):
-        label_vocab[x] = i
-    return label_vocab
-
+    return MLMLoader(dataframe=df, token2idx=token2idx, age2idx=age_vocab_dict, max_len=max_len_seq)
 
 def _is_dataset_valid(df: pd.DataFrame) -> bool:
     number_of_rows = df.shape[0]
     return number_of_rows > 0  # true if valid. false if invalid.
 
+def count_visits(codes) -> int:
+    return len([code for code in ast.literal_eval(codes) if code == 'SEP'])
 
-def create_datasets(data_dir_path: str, test_path: str, bert_vocab: Dict, age_vocab_dict: Dict, max_len_seq: int,
-                    min_visit: int):
+
+def create_datasets(data_dir_path: str, test_path: str, vocab_pickle_path: str, age_vocab_dict: Dict, max_len_seq: int, min_visit: int):
+    bert_vocab = load_obj(name=vocab_pickle_path)
     local_datasets = []
     test_dataset = create_dataset(data_path=test_path, bert_vocab=bert_vocab, age_vocab_dict=age_vocab_dict,
                                   max_len_seq=max_len_seq, min_visit=min_visit)
@@ -139,38 +130,16 @@ def create_datasets(data_dir_path: str, test_path: str, bert_vocab: Dict, age_vo
             print(f'{data_path} is invalid (zero rows) for min_visit={min_visit}')
     return local_datasets, test_dataset
 
-
-def calc_measurements(logits, label, threshold=0.5):
-    sig = nn.Sigmoid()
-    output = sig(logits)
-    average_precision = average_precision_score(label.numpy(), output.numpy(), average='samples')
-    auc_roc = roc_auc_score(label.numpy(), output.numpy(), average='samples')
-    outputs_backup = torch.clone(output)
-
-    output = np.array(output) >= threshold
-    recall = recall_score(label.numpy(), output, average='micro')
-    f1 = f1_score(label.numpy(), output, average='micro')
-    return average_precision, auc_roc, recall, f1, outputs_backup, label
-
-
-def count_visits(codes) -> int:
-    return len([code for code in ast.literal_eval(codes) if code == 'SEP'])
-
-
-def load_pretrained_model(pretrain_model_path: str, model: nn.Module):
-    # load pretrained model and update weights
-    pretrained_dict = torch.load(pretrain_model_path)
-    model_dict = model.state_dict()
-    # 1. filter out unnecessary keys
-    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-    # 2. overwrite entries in the existing state dict
-    model_dict.update(pretrained_dict)
-    # 3. load the new state dict
-    model.load_state_dict(model_dict)
-    return model
-
-
-def init_multi_label_binarizer(label_vocab: Dict) -> MultiLabelBinarizer:
-    mlb = MultiLabelBinarizer(classes=list(label_vocab.values()))
-    mlb.fit([[each] for each in list(label_vocab.values())])
-    return mlb
+def calc_acc(label, pred):
+    logs = nn.LogSoftmax(dim=1)
+    label = label.cpu().numpy()
+    ind = np.where(label != -1)[0]
+    truepred = pred.cpu().numpy()
+    truepred = truepred[ind]
+    truelabel = label[ind]
+    truepred = logs(torch.tensor(truepred))
+    outs = [np.argmax(pred_x) for pred_x in truepred.numpy()]
+    if len(outs) == 0:
+        return None
+    precision = precision_score(truelabel, outs, average='micro')
+    return precision

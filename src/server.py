@@ -1,16 +1,22 @@
 import copy
 import gc
-from collections import OrderedDict
-from multiprocessing import pool, cpu_count
-from operator import itemgetter
+import logging
 
 import model
+import numpy as np
+import torch
+import torch.nn as nn
+
+from multiprocessing import pool, cpu_count
+
+from model.MLM import BertForMaskedLM
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from collections import OrderedDict
 
 from .models import *
-from .client import Client
 from .utils import *
+from .client import Client
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +37,9 @@ class Server(object):
         seed: Int for random seed.
         device: Training machine indicator (e.g. "cpu", "cuda").
         mp_flag: Boolean indicator of the usage of multiprocessing for "client_update" and "client_evaluate" methods.
-        data_dir_path: Path to read example_data.
+        data_dir_path: Path to read data.
         dataset_name: Name of the dataset.
-        num_shards: Number of shards for simulating non-IID example_data split (valid only when 'iid = False").
+        num_shards: Number of shards for simulating non-IID data split (valid only when 'iid = False").
         iid: Boolean Indicator of how to split dataset (IID or non-IID).
         init_config: kwargs for the initialization of the model.
         fraction: Ratio for the number of clients selected in each federated round.
@@ -41,22 +47,23 @@ class Server(object):
         local_epochs: Epochs required for client model update.
         batch_size: Batch size for updating/evaluating a client/global model.
         criterion: torch.nn instance for calculating loss.
+        optimizer: torch.optim instance for updating parameters.
+        optim_config: Kwargs provided for optimizer.
     """
 
-    def __init__(self, writer, model_config={}, global_config={}, data_config={}, init_config={}, fed_config={}):
+    def __init__(self, writer, model_config={}, global_config={}, data_config={}, init_config={}, fed_config={},
+                 optim_config={}):
         self.clients = None
         self._round = 0
         self.writer = writer
+        self.vocab_pickle_path = data_config["vocab_pickle_path"]
         self.age_vocab_dict, _ = age_vocab(max_age=data_config["max_patient_age"])
-        self.bert_vocab = load_obj(data_config["vocab_pickle_path"])
-        model_config['vocab_size'] = len(self.bert_vocab['token2idx'].keys())
+
+        model_config['vocab_size'] = len(load_obj(self.vocab_pickle_path)['token2idx'].keys())
         model_config["age_vocab_size"] = len(self.age_vocab_dict.keys())
-        label_vocab = format_label_vocab(self.bert_vocab['token2idx'])
-        model_config["num_labels"] = len(label_vocab.keys())
 
         self.model = eval(model_config["name"])(**model_config)
-        self.pretrained_model_path = global_config["pretrained_model_path"]
-        self.model = load_pretrained_model(pretrain_model_path=self.pretrained_model_path, model=self.model)
+
         self.seed = global_config["seed"]
         self.device = global_config["device"]
         self.mp_flag = global_config["is_mp"]
@@ -67,14 +74,18 @@ class Server(object):
         # self.max_patient_age = data_config["max_patient_age"]
         self.max_len_seq = data_config["max_len_seq"]
         self.min_visit = data_config["min_visit"]
+
         self.init_config = init_config
 
         self.fraction = fed_config["C"]
+        self.num_clients = fed_config["K"]
         self.num_rounds = fed_config["R"]
         self.local_epochs = fed_config["E"]
         self.batch_size = fed_config["B"]
 
-        self.mlb = init_multi_label_binarizer(label_vocab=label_vocab)
+        self.criterion = fed_config["criterion"]
+        self.optimizer = fed_config["optimizer"]
+        self.optim_config = optim_config
 
     def setup(self, **init_kwargs):
         """Set up all configuration for federated learning."""
@@ -92,7 +103,7 @@ class Server(object):
         gc.collect()
 
         # split local dataset for each client
-        local_datasets, test_dataset = create_datasets(self.data_dir_path, self.test_path, self.bert_vocab,
+        local_datasets, test_dataset = create_datasets(self.data_dir_path, self.test_path, self.vocab_pickle_path,
                                                        self.age_vocab_dict, self.max_len_seq, self.min_visit)
 
         # assign dataset to each client
@@ -105,7 +116,8 @@ class Server(object):
         # configure detailed settings for client update and
         self.setup_clients(
             batch_size=self.batch_size,
-            num_local_epochs=self.local_epochs,
+            criterion=self.criterion, num_local_epochs=self.local_epochs,
+            optimizer=self.optimizer, optim_config=self.optim_config
         )
 
         # send the model skeleton to all clients
@@ -118,7 +130,7 @@ class Server(object):
             client = Client(client_id=k, local_data=dataset, device=self.device)
             clients.append(client)
 
-        message = f"[Round: {str(self._round).zfill(4)}] ...successfully created all {str(len(clients))} clients!"
+        message = f"[Round: {str(self._round).zfill(4)}] ...successfully created all {str(self.num_clients)} clients!"
         print(message);
         logging.info(message)
         del message;
@@ -130,7 +142,7 @@ class Server(object):
         for k, client in tqdm(enumerate(self.clients), leave=False):
             client.setup(**client_config)
 
-        message = f"[Round: {str(self._round).zfill(4)}] ...successfully finished setup of all {str(len(self.clients))} clients!"
+        message = f"[Round: {str(self._round).zfill(4)}] ...successfully finished setup of all {str(self.num_clients)} clients!"
         print(message);
         logging.info(message)
         del message;
@@ -145,7 +157,7 @@ class Server(object):
             for client in tqdm(self.clients, leave=False):
                 client.model = copy.deepcopy(self.model)
 
-            message = f"[Round: {str(self._round).zfill(4)}] ...successfully transmitted models to all {str(len(self.clients))} clients!"
+            message = f"[Round: {str(self._round).zfill(4)}] ...successfully transmitted models to all {str(self.num_clients)} clients!"
             print(message);
             logging.info(message)
             del message;
@@ -172,9 +184,9 @@ class Server(object):
         del message;
         gc.collect()
 
-        num_sampled_clients = max(int(self.fraction * len(self.clients)), 1)
+        num_sampled_clients = max(int(self.fraction * self.num_clients), 1)
         sampled_client_indices = sorted(
-            np.random.choice(a=[i for i in range(len(self.clients))], size=num_sampled_clients, replace=False).tolist())
+            np.random.choice(a=[i for i in range(self.num_clients)], size=num_sampled_clients, replace=False).tolist())
 
         return sampled_client_indices
 
@@ -189,7 +201,7 @@ class Server(object):
 
         selected_total_size = 0
         for idx in tqdm(sampled_client_indices, leave=False):
-            self.clients[idx].client_update(mlb=self.mlb)
+            self.clients[idx].client_update()
             selected_total_size += len(self.clients[idx])
 
         message = f"[Round: {str(self._round).zfill(4)}] ...{len(sampled_client_indices)} clients are selected and updated (with total sample size: {str(selected_total_size)})!"
@@ -209,7 +221,7 @@ class Server(object):
         del message;
         gc.collect()
 
-        self.clients[selected_index].client_update(mlb=self.mlb)
+        self.clients[selected_index].client_update()
         client_size = len(self.clients[selected_index])
 
         message = f"[Round: {str(self._round).zfill(4)}] ...client {str(self.clients[selected_index].id).zfill(4)} is selected and updated (with total sample size: {str(client_size)})!"
@@ -253,7 +265,7 @@ class Server(object):
         gc.collect()
 
         for idx in sampled_client_indices:
-            self.clients[idx].client_evaluate(mlb=self.mlb)
+            self.clients[idx].client_evaluate()
 
         message = f"[Round: {str(self._round).zfill(4)}] ...finished evaluation of {str(len(sampled_client_indices))} selected clients!"
         print(message)
@@ -263,7 +275,7 @@ class Server(object):
 
     def mp_evaluate_selected_models(self, selected_index):
         """Multiprocessing-applied version of "evaluate_selected_models" method."""
-        self.clients[selected_index].client_evaluate(mlb=self.mlb)
+        self.clients[selected_index].client_evaluate()
         return True
 
     def train_federated_model(self):
@@ -302,86 +314,74 @@ class Server(object):
         self.average_model(sampled_client_indices, mixing_coefficients)
 
     def evaluate_global_model(self):
-        """Evaluate the global model using the global holdout dataset (self.example_data)."""
+        """Evaluate the global model using the global holdout dataset (self.data)."""
         self.model.eval()
-        y = []
-        y_label = []
-        tr_loss = 0
         self.model.to(self.device)
+        batch_precision_results = []
+        test_loss, correct = 0, 0
 
         with torch.no_grad():
             for step, batch in enumerate(self.dataloader):
-                age_ids, input_ids, posi_ids, segment_ids, attMask, targets, _ = batch
-                targets = torch.tensor(self.mlb.transform(targets.numpy()), dtype=torch.float32).to(self.device)
                 batch = tuple(t.to(self.device) for t in batch)
-                age_ids, input_ids, posi_ids, segment_ids, attMask, _, _ = batch
+                age_ids, input_ids, posi_ids, segment_ids, attMask, masked_label = batch
+                loss, pred, label = self.model(input_ids, age_ids, segment_ids, posi_ids, attention_mask=attMask,
+                                               masked_lm_labels=masked_label)
+                unpadded_indexes = np.where(label.cpu().numpy() != -1)[0]
+                if len(unpadded_indexes) == 0:
+                    continue
+                test_loss += loss
+                # predicted = pred.argmax(dim=1, keepdim=True) # TODO SHOULD BE CHANGED FOR MULTI-LABEL TASKS!
+                # correct += predicted.eq(label.view_as(predicted)).sum().item()
+                batch_precision_result = calc_acc(label, pred)
+                batch_precision_results.append(batch_precision_result)
 
-                loss, logits = self.model(input_ids, age_ids, segment_ids, posi_ids, attention_mask=attMask,
-                                          labels=targets)
-                logits = logits.cpu()
-                targets = targets.cpu()
-                tr_loss += loss.item()
-                y_label.append(targets)
-                y.append(logits)
-
+                if self.device == "cuda": torch.cuda.empty_cache()
         self.model.to("cpu")
-        y_label = torch.cat(y_label, dim=0)
-        y = torch.cat(y, dim=0)
-        aps, auc_roc, recall, f1, output, label = calc_measurements(y, y_label)
-        return aps, auc_roc, recall, f1, output, tr_loss
+
+        test_loss = test_loss / len(self.dataloader)
+        print(f'server test_loss={test_loss}, len(self.dataloader)={len(self.dataloader)}, test_loss={test_loss}')
+        test_accuracy = sum(batch_precision_results) / len(batch_precision_results)
+        return test_loss, test_accuracy  # todo: concat tensors on gpu device
 
     def fit(self):
         """Execute the whole process of the federated learning."""
-        best_aps_result = 0
-        self.results = {"loss": [], "aps": [], 'auc': []}
+        best_result = 0
+        self.results = {"loss": [], "accuracy": []}
         for r in range(self.num_rounds):
             self._round = r + 1
 
             self.train_federated_model()
-            aps, auc_roc, recall, f1, output, tr_loss = self.evaluate_global_model()
-            pretrained_model_name = self.pretrained_model_path.rsplit('/', 1)[-1]
+            test_loss, test_accuracy = self.evaluate_global_model()
 
-            self.results['loss'].append(tr_loss)
-            self.results['aps'].append(aps)
-            self.results['auc'].append(auc_roc)
+            self.results['loss'].append(test_loss)
+            self.results['accuracy'].append(test_accuracy)
 
             self.writer.add_scalars(
                 'Loss',
                 {
-                    f"pretrained_model_name={pretrained_model_name}_min_visit={self.min_visit}_loss": tr_loss},
+                    f"[{self.dataset_name}]_{self.model.name} C_{self.fraction}, E_{self.local_epochs}, B_{self.batch_size}": test_loss},
                 self._round
             )
             self.writer.add_scalars(
-                'aps',
+                'Accuracy',
                 {
-                    f"pretrained_model_name={pretrained_model_name}_min_visit={self.min_visit}_aps": aps},
-                self._round
-            )
-            self.writer.add_scalars(
-                'auc_roc',
-                {
-                    f"pretrained_model_name={pretrained_model_name}_min_visit={self.min_visit}_auc_roc": auc_roc},
+                    f"[{self.dataset_name}]_{self.model.name} C_{self.fraction}, E_{self.local_epochs}, B_{self.batch_size}": test_accuracy},
                 self._round
             )
 
             message = f"[Round: {str(self._round).zfill(4)}] Evaluate global model's performance...!\
                 \n\t[Server] ...finished evaluation!\
-                \n\t=> Loss: {tr_loss:.4f}\
-                \n\t=> aps: {100. * aps:.2f}%\n"
+                \n\t=> Loss: {test_loss:.4f}\
+                \n\t=> Accuracy: {100. * test_accuracy:.2f}%\n"
             print(message)
             logging.info(message)
             del message
             gc.collect()
-            if aps > best_aps_result:
-                best_aps_result = aps
+            if test_accuracy > best_result:
+                best_result = test_accuracy
                 print("** ** * Saving fine - tuned model ** ** * ")
                 model_to_save = model.module if hasattr(self.model,
                                                         'module') else self.model  # Only save the model it-self
                 torch.save(model_to_save.state_dict(), self.output_model_path)
                 print("** ** * DONE Saving fine - tuned model ** ** * ")
         self.transmit_model()
-
-    def print_best_results(self):
-        index, best_aps = max(enumerate(self.results['aps']), key=itemgetter(1))
-        auc = self.results['auc'][index]
-        print(f'best_aps={best_aps}, auc={auc}')

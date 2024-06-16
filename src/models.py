@@ -1,6 +1,4 @@
-from typing import Dict
-
-from model.NextXVisit import BertForMultiLabelPrediction
+from model.MLM import BertForMaskedLM
 from pytorch_pretrained_bert import BertConfig
 
 
@@ -25,8 +23,7 @@ class CustomBertConfig(BertConfig):
         self.age_vocab_size = config.get('age_vocab_size')
 
 
-class CustomBertForMultiLabelPrediction(BertForMultiLabelPrediction):
-    def __init__(self, name: str, num_labels: int, feature_dict_config: Dict, **kwargs):
-        super(CustomBertForMultiLabelPrediction, self).__init__(config=CustomBertConfig(kwargs), num_labels=num_labels,
-                                                                feature_dict=feature_dict_config)
+class CustomBertForMaskedLM(BertForMaskedLM):
+    def __init__(self, name, **kwargs):
+        super(CustomBertForMaskedLM, self).__init__(config=CustomBertConfig(kwargs))
         self.name = name
