@@ -71,6 +71,39 @@ def create_token2index_file(df: pd.DataFrame, output_file_path: str):
 
 
 ## Run
-* `python3 main.py` <path_to_config.yaml>
+1) Install Dependencies
+   
+    Run the following command to install the required packages:
+    `pip install -r requirements.txt`
 
+2. Preprocess MIMIC-IV Dataset:
+   
+    Use the provided notebook to preprocess the MIMIC-IV dataset:
+    [MIMIC-IV Feature Extraction Notebook](https://github.com/nadavlab/FederatedBEHRT/blob/main/mimiciv_feature_extraction.ipynb)
+
+3) Train MLM via Federated Learning
+   
+    Switch to the `fl_mlm_training branch` for the training code:
+    `git checkout fl_mlm_training`
+
+5) Edit Configuration
+   
+    Modify the `config.yaml` file. Update the data_config section to reflect the paths of the datasets saved from the preprocessing notebook.
+
+6) Run Training
+   
+    Start the training process by running:
+    `python main.py <path_to_config.yaml>`
+
+7) Switch back to the main branch to run the federated learning for the next visit prediction model:
+    `git checkout main`
+
+8) Update Configuration
+   
+    In the configuration file, set the `pretrained_model_path` to the federated learning MLM model saved from the previous step.
+
+9) Run Next Visit Model Training
+    
+    Execute the training for the next visit model:
+    `python main.py <path_to_config.yaml>`
 
